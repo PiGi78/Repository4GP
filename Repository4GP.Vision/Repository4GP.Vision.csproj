@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net5.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Vision4GP.Core" Version="1.1.6"/>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Repository4GP.Core\Repository4GP.Core.csproj"/>
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="5.0.0"/>
+  </ItemGroup>
+</Project>
