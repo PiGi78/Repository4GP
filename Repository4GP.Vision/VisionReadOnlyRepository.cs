@@ -1,7 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Linq.Dynamic.Core;
+using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Caching.Memory;
 using Repository4GP.Core;
 using Vision4GP.Core.FileSystem;
 
@@ -9,30 +13,41 @@ namespace Repository4GP.Vision
 {
 
     /// <summary>
-    /// Read only repository that works with vision file
+    /// Readonly repository that works with Vision file
     /// </summary>
-    /// <typeparam name="TModel">Model type</typeparam>
-    /// <typeparam name="TKey">Model primary key type</typeparam>
+    /// <typeparam name="TModel">Model</typeparam>
+    /// <typeparam name="TKey">Type of the model key</typeparam>
     public abstract class VisionReadOnlyRepository<TModel, TKey> : IReadOnlyRepository<TModel, TKey>
-        where TModel : class, IModel<TKey>, new()
+        where TModel : class, IReadOnlyModel<TKey>, new()
     {
 
         /// <summary>
-        /// Create a new instance of a read only vision file repository
+        /// Create a new instance of a read only vision file repository that uses cache
         /// </summary>
         /// <param name="visionFileSystem">Vision file system</param>
         /// <param name="fileName">Vision file name</param>
         /// <param name="paginationTokenManager">Pagination token manager</param>
-        public VisionReadOnlyRepository(IVisionFileSystem visionFileSystem, string fileName, IPaginationTokenManager paginationTokenManager)
+        /// <param name="cache">Memory cache</param>
+        public VisionReadOnlyRepository(string fileName, 
+                                              IVisionFileSystem visionFileSystem, 
+                                              IPaginationTokenManager paginationTokenManager,
+                                              IMemoryCache cache)
         {
             if (visionFileSystem == null) throw new ArgumentNullException(nameof(visionFileSystem));
             if (string.IsNullOrEmpty(fileName)) throw new ArgumentNullException(nameof(fileName));
             if (paginationTokenManager == null) throw new ArgumentNullException(nameof(paginationTokenManager));
+            if (cache == null) throw new ArgumentNullException(nameof(cache));
 
             VisionFileSystem = visionFileSystem;
             FileName = fileName;
             PaginationTokenManager = paginationTokenManager;
+            Cache = cache;
         }
+
+        /// <summary>
+        /// Cache
+        /// </summary>
+        protected IMemoryCache Cache { get; }
 
 
         /// <summary>
@@ -58,13 +73,144 @@ namespace Repository4GP.Vision
         /// </summary>
         /// <param name="criteria">Criteria to apply</param>
         /// <returns>Result of the fetch</returns>
-        public virtual Task<FetchResult<TModel>> Fetch(FetchCriteria<TModel> criteria = null)
+        public virtual async Task<FetchResult<TModel>> Fetch(FetchCriteria<TModel> criteria = null)
         {
-            if (criteria?.OrderBy == null)
+            var items = await FetchAll();
+
+            items = ApplyCriteria(items, criteria);
+
+            items = ApplyPagination(items, criteria.PageSize);
+
+            var token = GetPaginationToken(criteria);
+
+            return new FetchResult<TModel> (items, token);
+        }
+
+
+        /// <summary>
+        /// Apply the criteria to a list
+        /// </summary>
+        /// <param name="items">List where apply the criteria</param>
+        /// <param name="criteria">Criteria to apply</param>
+        /// <returns>List with applied criteria</returns>
+        protected virtual List<TModel> ApplyCriteria(List<TModel> items, FetchCriteria<TModel> criteria)
+        {
+            if (items == null) throw new ArgumentNullException(nameof(items));
+            if (!items.Any() || criteria == null) return items;
+
+            // Filter
+            var filter = criteria?.Filter;
+            if (filter != null)
             {
-                return FetchByIndex(criteria, 0);
+                items = items.Where(x => filter(x)).ToList();
             }
-            return FetchAll(criteria);
+            
+            // Order by
+            var orderedList = ApplySort(items, criteria.OrderBy);
+
+            return orderedList;
+        }
+
+
+        /// <summary>
+        /// Orders the list by the sort clause
+        /// </summary>
+        /// <param name="source">List to order</param>
+        /// <param name="orderByInfo">Sort clause</param>
+        /// <returns>Ordered list</returns>
+        protected virtual List<TModel> ApplySort(List<TModel> source, OrderByInfo orderByInfo)
+        {
+            if (source == null) return null;
+            if (orderByInfo == null || !orderByInfo.Items.Any()) return source;
+
+            var orderByString = new StringBuilder();
+            var separator = string.Empty;
+            foreach (var orderInfo in orderByInfo.Items)
+            {
+                orderByString.Append(separator);
+                separator = ", ";
+                if (orderInfo.Order == SortOrder.Descending)
+                {
+                    orderByString.Append($"{orderInfo.PropertyName} DESC");
+                }
+                else
+                {
+                    orderByString.Append(orderInfo.PropertyName);
+                }
+            }
+
+            return source.AsQueryable().OrderBy(orderByString.ToString()).ToList();
+        }
+
+
+        /// <summary>
+        /// Apply the pagination to a list
+        /// </summary>
+        /// <param name="source">List to paginate</param>
+        /// <param name="pageSize">Size of a page</param>
+        /// <param name="currentPage">Page to extract (0 based)</param>
+        /// <returns>Paginated list</returns>
+        protected virtual List<TModel> ApplyPagination(List<TModel> source, int pageSize, int currentPage = 0)
+        {
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            if (pageSize < 1) return source;
+
+            // Take/Skip
+            var take = pageSize; 
+            var skip = (currentPage * pageSize);
+
+            // Apply pagination
+            var result = skip > 0 ? source.Skip(skip).Take(take) : source.Take(take);
+
+            // Result
+            return result.ToList();
+        }
+
+
+        /// <summary>
+        /// Gets the pagination token
+        /// </summary>
+        /// <param name="criteria">Criteria of the pagination token</param>
+        /// <param name="currentPage">Current page</param>
+        /// <returns>Pagination token or null if there is no pagination</returns>
+        protected string GetPaginationToken(FetchCriteria<TModel> criteria, int currentPage = 0)
+        {
+            var pageSize = criteria?.PageSize;
+            if (!pageSize.HasValue || pageSize.Value == 0) return null;
+
+            return PaginationTokenManager.CreateToken(new PaginationTokenInfo<TModel> {
+                Criteria = criteria,
+                CurrentPage = currentPage
+            });
+        }
+
+
+        /// <summary>
+        /// Gets all items from cache or from the file if cache is invalid
+        /// </summary>
+        /// <returns>List of all items</returns>
+        protected virtual async Task<List<TModel>> FetchAll()
+        {
+            var key = $"{FileName}__{typeof(TModel).FullName}";
+            
+            var fileDate = File.GetLastWriteTime(FileName);
+            if (Cache.TryGetValue<VisionCacheFileEntry<TModel>>(key, out VisionCacheFileEntry<TModel> cacheValue))
+            {
+                if (fileDate == cacheValue.FileLastWriteTimeUtc)
+                {
+                    return cacheValue.Items;
+                }
+            }
+
+            var items = await FetchAllFromFile();
+            var keyEntry = new VisionCacheFileEntry<TModel> 
+            {
+                FileLastWriteTimeUtc = fileDate,
+                Items = items                
+            };
+            Cache.Set(key, items, new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(10) });
+
+            return items;
         }
 
 
@@ -73,21 +219,26 @@ namespace Repository4GP.Vision
         /// </summary>
         /// <param name="paginationToken">Token for pagination</param>
         /// <returns>Next page of a pagination</returns>
-        public virtual Task<FetchResult<TModel>> FetchNext(string paginationToken)
+        public virtual async Task<FetchResult<TModel>> FetchNext(string paginationToken)
         {
             if (string.IsNullOrEmpty(paginationToken)) throw new ArgumentNullException(nameof(paginationToken));
 
             var paginationInfo = (PaginationTokenInfo<TModel>)PaginationTokenManager.DecodeToken(paginationToken);
             if (paginationInfo == null) throw new ApplicationException($"Pagination token is not valid. Current value is '{paginationToken}'");
 
-            if (paginationInfo.KeyIndex.HasValue)
-            {
-                return FetchByIndex(paginationInfo.Criteria, paginationInfo.KeyIndex.Value, paginationInfo.LastRecord);
-            }
-            else
-            {
-                return FetchAll(paginationInfo.Criteria, paginationInfo.CurrentPage.Value);
-            }
+            var criteria = paginationInfo.Criteria;
+
+            var items = await FetchAll();
+
+            items = ApplyCriteria(items, criteria);
+
+            var currentPage = paginationInfo.CurrentPage.GetValueOrDefault() + 1;
+
+            items = ApplyPagination(items, criteria.PageSize, currentPage);
+
+            var token = GetPaginationToken(criteria, currentPage);
+
+            return new FetchResult<TModel> (items, token);
         }
 
 
@@ -100,12 +251,9 @@ namespace Repository4GP.Vision
         {
             if (pk == null) throw new ArgumentNullException(nameof(pk));
 
-            var items = await FetchByPks(new List<TKey> { pk });
-            if (items.Any())
-            {
-                return items.Single();
-            }
-            return null;
+            var items = await FetchAll();
+
+            return items.Where(x => x.Pk.Equals(pk)).SingleOrDefault();
         }
 
 
@@ -114,42 +262,14 @@ namespace Repository4GP.Vision
         /// </summary>
         /// <param name="pks">Primary keys to look for</param>
         /// <returns>All models that match the given list of primary keys</returns>
-        public virtual Task<IEnumerable<TModel>> FetchByPks(IEnumerable<TKey> pks)
+        public virtual async Task<IEnumerable<TModel>> FetchByPks(IEnumerable<TKey> pks)
         {
             if (pks == null || !pks.Any()) throw new ArgumentNullException(nameof(pks));
-            
-            var result = new List<TModel>();
 
-            using (var file = VisionFileSystem.GetVisionFile(FileName))
-            {
-                file.Open(FileOpenMode.Input);
+            var items = await FetchAll();
 
-                foreach (var pk in pks)
-                {
-                    var record = file.GetNewRecord();
-                    MapPrimaryKeyToRecord(pk, record);
-                    var newRecord = file.Read(record);
-                    if (newRecord != null)
-                    {
-                        var model = new TModel();
-                        MapRecordToModel(record, model);
-                        result.Add(model);
-                    }
-                }
-
-                file.Close();
-            }
-
-            return Task.FromResult(result.AsEnumerable());
+            return items.Where(x => pks.Contains(x.Pk));
         }
-
-
-        /// <summary>
-        /// Map the primary key to a vision record
-        /// </summary>
-        /// <param name="pk">Primary key to map</param>
-        /// <param name="record">Record where map the primary key</param>
-        protected abstract void MapPrimaryKeyToRecord(TKey pk, IVisionRecord record);
 
 
         /// <summary>
@@ -158,91 +278,15 @@ namespace Repository4GP.Vision
         /// <param name="record">Record where take the properties</param>
         /// <param name="model">Model where put the values</param>
         protected abstract void MapRecordToModel(IVisionRecord record, TModel model);
-    
-
-        /// <summary>
-        /// Fetch data using a specific zero based index
-        /// </summary>
-        /// <param name="criteria">Fetch criteria</param>
-        /// <param name="keyIndex">Index (key) to use, zero based</param>
-        /// <param name="startRecord">Start record</param>
-        /// <returns>Result of the fetch</returns>
-        protected Task<FetchResult<TModel>> FetchByIndex(FetchCriteria<TModel> criteria, int keyIndex, IVisionRecord startRecord = null)
-        {
-            var items = new List<TModel>();
-            var filter = criteria?.Filter;
-            var pageSize = criteria == null ? 0 : criteria.PageSize;
-            var count = 0;
-            IVisionRecord record = startRecord;
-
-            using (var file = VisionFileSystem.GetVisionFile(FileName))
-            {
-                file.Open(FileOpenMode.Input);
-
-                var startMode = startRecord == null ? FileStartMode.GreaterOrEqual : FileStartMode.Greater;
-                if (file.Start(keyIndex, startRecord, startMode))
-                {
-                    // Read next loop
-                    while (true)
-                    {
-                        // Next record
-                        record = file.ReadNext();
-                        if (record == null) break;
-
-                        // Convert to model
-                        var model = new TModel();
-                        MapRecordToModel(record, model);
-
-                        // Check for filter
-                        if (filter == null ||
-                            filter(model))
-                        {
-                            items.Add(model);
-
-                            // End of the page
-                            if (pageSize > 0)
-                            {
-                                count++;
-                                if (count == pageSize) break;
-                            }
-                        }
-                    }
-
-                }
-                file.Close();
-            }
-
-            // Pagination token, if needed
-            string paginationToken = null;
-            if (pageSize > 0 && record != null)
-            {
-                var info = new PaginationTokenInfo<TModel>
-                {
-                    Criteria = criteria,
-                    LastRecord = record,
-                    KeyIndex = keyIndex
-                };
-                paginationToken = PaginationTokenManager.CreateToken(info);
-            }
-
-            // result
-            var result = new FetchResult<TModel>(items, paginationToken);
-            return Task.FromResult(result);
-        }
 
 
         /// <summary>
         /// Fetch models reading all file
         /// </summary>
-        /// <param name="criteria">Criteria</param>
-        /// <param name="currentPage">Page to load</param>
         /// <returns>Requested models</returns>
-        protected Task<FetchResult<TModel>> FetchAll(FetchCriteria<TModel> criteria, int currentPage = 0)
+        protected virtual Task<List<TModel>> FetchAllFromFile()
         {
             var items = new List<TModel>();
-            var filter = criteria?.Filter;
-            int page = currentPage;
-            int pageSize = (criteria?.PageSize).HasValue ? criteria.PageSize : 0;
             IVisionRecord record;
             
             using (var file = VisionFileSystem.GetVisionFile(FileName))
@@ -260,35 +304,18 @@ namespace Repository4GP.Vision
                         // Convert to model
                         var model = new TModel();
                         MapRecordToModel(record, model);
-
-                        // Check for filter
-                        if (filter == null ||
-                            filter(model))
-                        {
-                            items.Add(model);
-                        }
+                        
+                        items.Add(model);
                     }
 
                 }
                 file.Close();
             }
 
-            string paginationToken = null;
-            if (pageSize > 0 && pageSize < items.Count())
-            {
-                var info = new PaginationTokenInfo<TModel>
-                {
-                    Criteria = criteria,
-                    CurrentPage = page + 1
-                };
-                paginationToken = PaginationTokenManager.CreateToken(info);
-                var skip = page * pageSize;
-                items = items.Skip(skip).Take(pageSize).ToList();
-            }
-
-            var result = new FetchResult<TModel>(items, paginationToken);
-            return Task.FromResult(result);
+            return Task.FromResult(items);
         }
 
+
+    
     }
 }

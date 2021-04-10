@@ -3,6 +3,11 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace Repository4GP.Core
 {
+
+
+    /// <summary>
+    /// Pagination token manager that worsk with memory cache
+    /// </summary>
     public class MemoryPaginationTokenManager : IPaginationTokenManager
     {
         
@@ -13,6 +18,7 @@ namespace Repository4GP.Core
         public MemoryPaginationTokenManager(IMemoryCache cache)
         {
             if (cache == null) throw new ArgumentNullException(nameof(cache));
+            Cache = cache;
         }
 
 

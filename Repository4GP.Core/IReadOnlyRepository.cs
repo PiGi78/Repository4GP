@@ -1,6 +1,5 @@
 using System.Threading.Tasks;
 using System.Collections.Generic;
-using System;
 
 namespace Repository4GP.Core
 {
@@ -8,7 +7,7 @@ namespace Repository4GP.Core
     /// Read only repository
     /// </summary>
     public interface IReadOnlyRepository<TModel, in TKey>
-        where TModel : class, IModel<TKey>
+        where TModel : class, IReadOnlyModel<TKey>
     {
         
         /// <summary>
