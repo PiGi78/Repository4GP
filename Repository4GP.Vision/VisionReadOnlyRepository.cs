@@ -83,9 +83,9 @@ namespace Repository4GP.Vision
         /// </summary>
         /// <param name="criteria">Criteria to apply</param>
         /// <returns>Result of the fetch</returns>
-        public virtual async Task<FetchResult<TModel>> Fetch(FetchCriteria<TModel> criteria = null)
+        public virtual Task<FetchResult<TModel>> Fetch(FetchCriteria<TModel> criteria = null)
         {
-            var items = await FetchAll();
+            var items = FetchAll();
             var count = items.Count;
 
             items = ApplyCriteria(items, criteria);
@@ -98,7 +98,7 @@ namespace Repository4GP.Vision
 
             Logger.LogDebug($"Read {count} records, where {criteriaCount} match criteria, returned {paginatedCount} after pagination, pagination token {token}");
 
-            return new FetchResult<TModel> (items, token);
+            return Task.FromResult(new FetchResult<TModel> (items, token));
         }   
 
 
@@ -204,10 +204,11 @@ namespace Repository4GP.Vision
         /// Gets all items from cache or from the file if cache is invalid
         /// </summary>
         /// <returns>List of all items</returns>
-        protected virtual async Task<List<TModel>> FetchAll()
+        protected virtual List<TModel> FetchAll()
         {
             var key = $"{FileName}__{typeof(TModel).FullName}";
             
+            // Check for cached data
             var fileDate = File.GetLastWriteTime(FileName);
             if (Cache.TryGetValue<VisionCacheFileEntry<TModel>>(key, out VisionCacheFileEntry<TModel> cacheValue))
             {
@@ -217,20 +218,33 @@ namespace Repository4GP.Vision
                     Logger.LogDebug($"Fetch {result.Count} items from cache with key {key} for file {FileName}");
                     return result;
                 }
+                Cache.Remove(key);
             }
 
-            var items = await FetchAllFromFile();
-            Logger.LogDebug($"Fetch {items.Count} items from file {FileName}. Stored them to cache with key {key}");
-
-            var keyEntry = new VisionCacheFileEntry<TModel> 
+            // Load data to cache
+            lock (cacheSyncObject)
             {
-                FileLastWriteTimeUtc = fileDate,
-                Items = items                
-            };
-            Cache.Set(key, items, new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(10) });
+                if (Cache.TryGetValue<VisionCacheFileEntry<TModel>>(key, out VisionCacheFileEntry<TModel> value))
+                {
+                    return value.Items;
+                }
 
-            return items;
+                var items = FetchAllFromFile();
+                Logger.LogDebug($"Fetch {items.Count} items from file {FileName}. Stored them to cache with key {key}");
+                var keyEntry = new VisionCacheFileEntry<TModel> 
+                {
+                    FileLastWriteTimeUtc = fileDate,
+                    Items = items                
+                };
+                Cache.Set(key, items, new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(10) });
+
+                // Returns data
+                return items;
+            }
         }
+
+
+        private static object cacheSyncObject = new object();
 
 
         /// <summary>
@@ -238,7 +252,7 @@ namespace Repository4GP.Vision
         /// </summary>
         /// <param name="paginationToken">Token for pagination</param>
         /// <returns>Next page of a pagination</returns>
-        public virtual async Task<FetchResult<TModel>> FetchNext(string paginationToken)
+        public virtual Task<FetchResult<TModel>> FetchNext(string paginationToken)
         {
             if (string.IsNullOrEmpty(paginationToken)) throw new ArgumentNullException(nameof(paginationToken));
 
@@ -249,7 +263,7 @@ namespace Repository4GP.Vision
 
             var criteria = paginationInfo.Criteria;
 
-            var items = await FetchAll();
+            var items = FetchAll();
             var count = items.Count;
 
             items = ApplyCriteria(items, criteria);
@@ -264,7 +278,7 @@ namespace Repository4GP.Vision
 
             Logger.LogDebug($"Read {count} records, where {criteriaCount} match criteria, returned {paginatedCount} after pagination, new pagination token {token}");
 
-            return new FetchResult<TModel> (items, token);
+            return Task.FromResult(new FetchResult<TModel> (items, token));
         }
 
 
@@ -273,13 +287,13 @@ namespace Repository4GP.Vision
         /// </summary>
         /// <param name="pk">Primary key to look for</param>
         /// <returns>Requested model or null if not found</returns>
-        public virtual async Task<TModel> GetByPk(TKey pk)
+        public virtual Task<TModel> GetByPk(TKey pk)
         {
             if (pk == null) throw new ArgumentNullException(nameof(pk));
 
-            var items = await FetchAll();
+            var items = FetchAll();
 
-            return items.Where(x => x.Pk.Equals(pk)).SingleOrDefault();
+            return Task.FromResult(items.Where(x => x.Pk.Equals(pk)).SingleOrDefault());
         }
 
 
@@ -288,13 +302,13 @@ namespace Repository4GP.Vision
         /// </summary>
         /// <param name="pks">Primary keys to look for</param>
         /// <returns>All models that match the given list of primary keys</returns>
-        public virtual async Task<IEnumerable<TModel>> FetchByPks(IEnumerable<TKey> pks)
+        public virtual Task<IEnumerable<TModel>> FetchByPks(IEnumerable<TKey> pks)
         {
             if (pks == null || !pks.Any()) throw new ArgumentNullException(nameof(pks));
 
-            var items = await FetchAll();
+            var items = FetchAll();
 
-            return items.Where(x => pks.Contains(x.Pk));
+            return Task.FromResult(items.Where(x => pks.Contains(x.Pk)));
         }
 
 
@@ -310,7 +324,7 @@ namespace Repository4GP.Vision
         /// Fetch models reading all file
         /// </summary>
         /// <returns>Requested models</returns>
-        protected virtual Task<List<TModel>> FetchAllFromFile()
+        protected virtual List<TModel> FetchAllFromFile()
         {
             var items = new List<TModel>();
             IVisionRecord record;
@@ -348,7 +362,7 @@ namespace Repository4GP.Vision
             }
 
             Logger.LogDebug($"Read {mappedCount + notMappedCount}, {mappedCount} mapped to entities, {notMappedCount} not mapped");
-            return Task.FromResult(items);
+            return items;
         }
 
 
