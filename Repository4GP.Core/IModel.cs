@@ -6,8 +6,14 @@ namespace Repository4GP.Core
     /// <summary>
     /// Defines a read only model
     /// </summary>
-    public interface IModel<TKey> : IReadOnlyModel<TKey>
+    public interface IModel<TKey>
     {
+        
+        /// <summary>
+        /// Primary key
+        /// </summary>
+        TKey Pk { get; set; }
+
         
         /// <summary>
         /// Token used for manage the concurrency
@@ -15,16 +21,4 @@ namespace Repository4GP.Core
         string ConcurrencyToken { get; set; }
     }
 
-
-    /// <summary>
-    /// Defines a read only model
-    /// </summary>
-    public interface IReadOnlyModel<TKey>
-    {
-        
-        /// <summary>
-        /// Primary key
-        /// </summary>
-        TKey Pk { get; set; }
-    }
 }

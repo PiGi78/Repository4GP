@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Repository4GP.Core;
 using Vision4GP.Core.FileSystem;
 
@@ -19,33 +20,33 @@ namespace Repository4GP.Vision
     /// <typeparam name="TModel">Model</typeparam>
     /// <typeparam name="TKey">Type of the model key</typeparam>
     public abstract class VisionReadOnlyRepository<TModel, TKey> : IReadOnlyRepository<TModel, TKey>
-        where TModel : class, IReadOnlyModel<TKey>, new()
+        where TModel : class, IModel<TKey>, new()
     {
 
         /// <summary>
-        /// Create a new instance of a read only vision file repository that uses cache
+        /// Create a new instance of a read only vision file repository
         /// </summary>
         /// <param name="visionFileSystem">Vision file system</param>
         /// <param name="fileName">Vision file name</param>
         /// <param name="paginationTokenManager">Pagination token manager</param>
         /// <param name="cache">Memory cache</param>
+        /// <param name="logger">Logger</param>
         public VisionReadOnlyRepository(string fileName, 
                                               IVisionFileSystem visionFileSystem, 
                                               IPaginationTokenManager paginationTokenManager,
                                               IMemoryCache cache,
-                                              ILogger<VisionReadOnlyRepository<TModel, TKey>> logger)
+                                              ILogger logger)
         {
             if (visionFileSystem == null) throw new ArgumentNullException(nameof(visionFileSystem));
             if (string.IsNullOrEmpty(fileName)) throw new ArgumentNullException(nameof(fileName));
             if (paginationTokenManager == null) throw new ArgumentNullException(nameof(paginationTokenManager));
             if (cache == null) throw new ArgumentNullException(nameof(cache));
-            if (logger == null) throw new ArgumentNullException(nameof(logger));
 
             VisionFileSystem = visionFileSystem;
             FileName = fileName;
             PaginationTokenManager = paginationTokenManager;
             Cache = cache;
-            Logger = logger;
+            Logger = logger ?? NullLogger.Instance;
         }
 
         /// <summary>
@@ -63,7 +64,7 @@ namespace Repository4GP.Vision
         /// <summary>
         /// Logger
         /// </summary>
-        private ILogger<VisionReadOnlyRepository<TModel, TKey>> Logger { get; }
+        protected ILogger Logger { get; }
 
 
         /// <summary>
@@ -78,11 +79,7 @@ namespace Repository4GP.Vision
         protected IVisionFileSystem VisionFileSystem { get; }
         
 
-        /// <summary>
-        /// Fetch all models
-        /// </summary>
-        /// <param name="criteria">Criteria to apply</param>
-        /// <returns>Result of the fetch</returns>
+        /// <inheritdoc />
         public virtual Task<FetchResult<TModel>> Fetch(FetchCriteria<TModel> criteria = null)
         {
             var items = FetchAll();
@@ -96,7 +93,9 @@ namespace Repository4GP.Vision
 
             var token = GetPaginationToken(criteria);
 
-            Logger.LogDebug($"Read {count} records, where {criteriaCount} match criteria, returned {paginatedCount} after pagination, pagination token {token}");
+            Logger.LogDebug("Read {Count} records, where {CriteriaCount} match criteria, returned {PaginatedCount} " +
+                             "after pagination, pagination token {Token}",
+                             count, criteriaCount, paginatedCount, token);
 
             return Task.FromResult(new FetchResult<TModel> (items, token));
         }   
@@ -215,7 +214,8 @@ namespace Repository4GP.Vision
                 if (fileDate == cacheValue.FileLastWriteTimeUtc)
                 {
                     var result = cacheValue.Items;
-                    Logger.LogDebug($"Fetch {result.Count} items from cache with key {key} for file {FileName}");
+                    Logger.LogDebug("Fetch {ResultCount} items from cache with key {Key} for file {FileName}",
+                                     result.Count, key, FileName);
                     return result;
                 }
                 Cache.Remove(key);
@@ -230,7 +230,8 @@ namespace Repository4GP.Vision
                 }
 
                 var items = FetchAllFromFile();
-                Logger.LogDebug($"Fetch {items.Count} items from file {FileName}. Stored them to cache with key {key}");
+                Logger.LogDebug("Fetch {ItemsCount} items from file {FileName}. Stored them to cache with key {Key}",
+                                items.Count, FileName, key);
                 var keyEntry = new VisionCacheFileEntry<TModel> 
                 {
                     FileLastWriteTimeUtc = fileDate,
@@ -247,11 +248,7 @@ namespace Repository4GP.Vision
         private static object cacheSyncObject = new object();
 
 
-        /// <summary>
-        /// Fetch next page of models
-        /// </summary>
-        /// <param name="paginationToken">Token for pagination</param>
-        /// <returns>Next page of a pagination</returns>
+        /// <inheritdoc />
         public virtual Task<FetchResult<TModel>> FetchNext(string paginationToken)
         {
             if (string.IsNullOrEmpty(paginationToken)) throw new ArgumentNullException(nameof(paginationToken));
@@ -259,7 +256,7 @@ namespace Repository4GP.Vision
             var paginationInfo = (PaginationTokenInfo<TModel>)PaginationTokenManager.DecodeToken(paginationToken);
             if (paginationInfo == null) throw new ApplicationException($"Pagination token is not valid. Current value is '{paginationToken}'");
 
-            Logger.LogDebug($"Loading next page for file {FileName}, pagination token {paginationToken}");
+            Logger.LogDebug("Loading next page for file {FileName}, pagination token {PaginationToken}", FileName, paginationToken);
 
             var criteria = paginationInfo.Criteria;
 
@@ -276,17 +273,15 @@ namespace Repository4GP.Vision
 
             var token = GetPaginationToken(criteria, currentPage);
 
-            Logger.LogDebug($"Read {count} records, where {criteriaCount} match criteria, returned {paginatedCount} after pagination, new pagination token {token}");
+            Logger.LogDebug("Read {RecordCount} records, where {CriteriaCount} match criteria, returned {PaginatedCount} after pagination, " +
+                            "new pagination token {Token}",
+                            count, criteriaCount, paginatedCount, token);
 
             return Task.FromResult(new FetchResult<TModel> (items, token));
         }
 
 
-        /// <summary>
-        /// Get a model by the given primary key, null if not found
-        /// </summary>
-        /// <param name="pk">Primary key to look for</param>
-        /// <returns>Requested model or null if not found</returns>
+        /// <inheritdoc />
         public virtual Task<TModel> GetByPk(TKey pk)
         {
             if (pk == null) throw new ArgumentNullException(nameof(pk));
@@ -297,11 +292,7 @@ namespace Repository4GP.Vision
         }
 
 
-        /// <summary>
-        /// Fetch models with given primary keys
-        /// </summary>
-        /// <param name="pks">Primary keys to look for</param>
-        /// <returns>All models that match the given list of primary keys</returns>
+        /// <inheritdoc />
         public virtual Task<IEnumerable<TModel>> FetchByPks(IEnumerable<TKey> pks)
         {
             if (pks == null || !pks.Any()) throw new ArgumentNullException(nameof(pks));
@@ -333,7 +324,7 @@ namespace Repository4GP.Vision
             var notMappedCount = 0;
             using (var file = VisionFileSystem.GetVisionFile(FileName))
             {
-                Logger.LogDebug($"Reading data from file {file.FilePath}");
+                Logger.LogDebug("Reading data from file {FilePath}", file.FilePath);
                 file.Open(FileOpenMode.Input);
                 if (file.Start())
                 {
@@ -361,7 +352,8 @@ namespace Repository4GP.Vision
                 file.Close();
             }
 
-            Logger.LogDebug($"Read {mappedCount + notMappedCount}, {mappedCount} mapped to entities, {notMappedCount} not mapped");
+            Logger.LogDebug("Read {RecordCount}, {MappedCount} mapped to entities, {NotMappedCount} not mapped",
+                            mappedCount + notMappedCount, mappedCount, notMappedCount);
             return items;
         }
 

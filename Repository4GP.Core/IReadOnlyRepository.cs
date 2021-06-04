@@ -7,7 +7,7 @@ namespace Repository4GP.Core
     /// Read only repository
     /// </summary>
     public interface IReadOnlyRepository<TModel, in TKey>
-        where TModel : class, IReadOnlyModel<TKey>
+        where TModel : class, IModel<TKey>
     {
         
         /// <summary>

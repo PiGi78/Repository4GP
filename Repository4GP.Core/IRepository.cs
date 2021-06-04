@@ -23,6 +23,7 @@ namespace Repository4GP.Core
         /// Update an item
         /// </summary>
         /// <param name="model">Item to update</param>
+        /// <exception cref="ConcurrencyException">Thrown when the data are changed in the meanwhile</exception>
         Task Update(TModel model);
 
 
@@ -30,6 +31,7 @@ namespace Repository4GP.Core
         /// Delete an item
         /// </summary>
         /// <param name="model">Item to delete</param>
+        /// <exception cref="ConcurrencyException">Thrown when the data are changed in the meanwhile</exception>
         Task Delete(TModel model);
 
 
@@ -37,7 +39,9 @@ namespace Repository4GP.Core
         /// Delete an item by the given keu
         /// </summary>
         /// <param name="key">Key of the item to delete</param>
-        Task Delete(TKey key);
+        /// <param name="concurrecyToken">Concurrency token of the model</param>
+        /// <exception cref="ConcurrencyException">Thrown when the data are changed in the meanwhile</exception>
+        Task Delete(TKey key, string concurrencyToken);
 
 
     }
