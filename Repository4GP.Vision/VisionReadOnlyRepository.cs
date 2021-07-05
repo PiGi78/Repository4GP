@@ -316,7 +316,7 @@ namespace Repository4GP.Vision
         /// </summary>
         /// <returns>Requested models</returns>
         protected virtual List<TModel> FetchAllFromFile()
-        {
+        {   
             var items = new List<TModel>();
             IVisionRecord record;
             

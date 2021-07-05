@@ -112,7 +112,13 @@ namespace Repository4GP.Core
     /// </summary>
     public enum SortOrder
     {
+        ///<summary>
+        /// Sort ascending
+        ///</summary>
         Ascending = 0,
+        ///<summary>
+        /// Sort descending
+        ///</summary>
         Descending = 10
     }
 

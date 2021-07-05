@@ -39,7 +39,7 @@ namespace Repository4GP.Core
         /// Delete an item by the given keu
         /// </summary>
         /// <param name="key">Key of the item to delete</param>
-        /// <param name="concurrecyToken">Concurrency token of the model</param>
+        /// <param name="concurrencyToken">Concurrency token of the model</param>
         /// <exception cref="ConcurrencyException">Thrown when the data are changed in the meanwhile</exception>
         Task Delete(TKey key, string concurrencyToken);
 
